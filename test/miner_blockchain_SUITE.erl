@@ -719,12 +719,13 @@ master_key_test(Config) ->
 
     %% try with only three keys (and succeed)
 
-    Txn8 = mvars(#{garbage_value => but_what_now}, 7, [Priv2, Priv3, Priv6]),
-    _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn8]) || M <- Miners],
-    ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
+    %% currently we require unanimity, so this test is not good.
+    %% Txn8 = mvars(#{garbage_value => but_what_now}, 7, [Priv2, Priv3, Priv6]),
+    %% _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn8]) || M <- Miners],
+    %% ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
 
     %% try with only two keys (and fail)
-    Txn9 = mvars(#{garbage_value => sheep_jokes}, 8, [Priv3, Priv6]),
+    Txn9 = mvars(#{garbage_value => sheep_jokes}, 7, [Priv3, Priv6]),
     _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn9]) || M <- Miners],
 
     {ok, Start5} = ct_rpc:call(hd(Miners), blockchain, height, [Blockchain1]),
@@ -732,12 +733,13 @@ master_key_test(Config) ->
 
     %% wait until height has increased by 15
     ok = miner_ct_utils:wait_for_gte(height, Miners, Start5 + 15),
-    ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
+    ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, goat_jokes_are_so_single_key),
+    %% ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
 
     %% try with two valid and one corrupted key proof (and fail again)
-    Txn10_0 = blockchain_txn_vars_v1:new(#{garbage_value => cmon}, 8),
+    Txn10_0 = blockchain_txn_vars_v1:new(#{garbage_value => cmon}, 7),
     Proofs10_0 = [blockchain_txn_vars_v1:create_proof(P, Txn10_0)
-                || P <- [Priv2, Priv3, Priv6]],
+                || P <- [Priv2, Priv3, Priv4, Priv5, Priv6]],
     [Proof10 | Rem] = Proofs10_0,
     Proof10Corrupted = <<Proof10/binary, "asdasdasdas">>,
     Txn10 = blockchain_txn_vars_v1:multi_proofs(Txn10_0, [Proof10Corrupted | Rem]),
@@ -749,12 +751,14 @@ master_key_test(Config) ->
 
     %% wait until height has increased by 15
     ok = miner_ct_utils:wait_for_gte(height, Miners, Start6 + 15),
-    ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
+    ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, goat_jokes_are_so_single_key),
+    %% ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, but_what_now),
 
     %% make sure that we safely ignore bad proofs and keys
     #{secret := Priv7, public := _Pub7} = libp2p_crypto:generate_keys(ecc_compact),
 
-    Txn11 = mvars(#{garbage_value => sheep_are_inherently_unfunny}, 8, [Priv4, Priv3, Priv6, Priv7]),
+    Txn11 = mvars(#{garbage_value => sheep_are_inherently_unfunny}, 7,
+                  [Priv2, Priv3, Priv4, Priv5, Priv6, Priv7]),
     _ = [ok = ct_rpc:call(M, blockchain_worker, submit_txn, [Txn11]) || M <- Miners],
     ok = miner_ct_utils:wait_for_chain_var_update(Miners, garbage_value, sheep_are_inherently_unfunny),
 
