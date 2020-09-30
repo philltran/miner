@@ -27,7 +27,8 @@
          conflict_test/1,
          reject_test/1,
          server_doesnt_close_test/1,
-         client_reports_overspend_test/1
+         client_reports_overspend_test/1,
+         dc_rewards_v4_test/1
         ]).
 
 %% common test callbacks
@@ -59,7 +60,8 @@ scv2_only_tests() ->
      conflict_test,
      reject_test,
      server_doesnt_close_test,
-     client_reports_overspend_test
+     client_reports_overspend_test,
+     dc_rewards_v4_test
     ].
 
 init_per_group(sc_v1, Config) ->
@@ -112,12 +114,19 @@ init_per_testcase(TestCase, Config0) ->
     AddGwTxns = [blockchain_txn_gen_gateway_v1:new(Addr, Addr, h3:from_geo({37.780586, -122.469470}, 13), 0)
                  || Addr <- Addresses],
 
-    BaseVars = #{?block_time => BlockTime,
-                 %% rule out rewards
-                 ?election_interval => infinity,
+    RewardVars = case TestCase of
+                           dc_rewards_v4_test -> #{ ?election_interval => 30,
+                                                    ?reward_version => 4 };
+                           _ ->
+                                %% rule out rewards
+                                #{ ?election_interval => infinity }
+                       end,
+
+    BaseVars0 = #{?block_time => BlockTime,
                  ?num_consensus_members => NumConsensusMembers,
                  ?batch_size => BatchSize,
                  ?dkg_curve => Curve},
+    BaseVars = maps:merge(BaseVars0, RewardVars),
     SCVars = ?config(sc_vars, Config),
     ct:pal("SCVars: ~p", [SCVars]),
 
@@ -951,6 +960,89 @@ open_state_channel(Config, ExpireWithin, Amount, OUI) ->
 
     ct:pal("SC: ~p", [SC]),
     ID.
+
+dc_rewards_v4_test(Config) ->
+    Miners = ?config(miners, Config),
+    [RouterNode, ClientNode | _] = Miners,
+
+    %% setup
+    %% oui txn
+    {ok, RouterPubkey, RouterSigFun, _ECDHFun} = ct_rpc:call(RouterNode, blockchain_swarm, keys, []),
+    RouterPubkeyBin = libp2p_crypto:pubkey_to_bin(RouterPubkey),
+    RouterSwarm = ct_rpc:call(RouterNode, blockchain_swarm, swarm, []),
+    ct:pal("RouterSwarm: ~p", [RouterSwarm]),
+    RouterP2PAddress = ct_rpc:call(RouterNode, libp2p_swarm, p2p_address, [RouterSwarm]),
+    ct:pal("RouterP2PAddress: ~p", [RouterP2PAddress]),
+    EUIs = [{16#deadbeef, 16#deadc0de}],
+    {Filter, _} = xor16:to_bin(xor16:new([ <<DevEUI:64/integer-unsigned-little,
+                                             AppEUI:64/integer-unsigned-little>> || {DevEUI, AppEUI} <- EUIs],
+                                         fun xxhash:hash64/1)),
+
+    OUI = 1,
+    OUITxn = ct_rpc:call(RouterNode,
+                         blockchain_txn_oui_v1,
+                         new,
+                         [OUI, RouterPubkeyBin, [RouterPubkeyBin], Filter, 8]),
+    ct:pal("OUITxn: ~p", [OUITxn]),
+    SignedOUITxn = ct_rpc:call(RouterNode,
+                               blockchain_txn_oui_v1,
+                               sign,
+                               [OUITxn, RouterSigFun]),
+    ct:pal("SignedOUITxn: ~p", [SignedOUITxn]),
+    ok = ct_rpc:call(RouterNode, blockchain_worker, submit_txn, [SignedOUITxn]),
+
+    %% check that oui txn appears on miners
+    CheckTypeOUI = fun(T) -> blockchain_txn:type(T) == blockchain_txn_oui_v1 end,
+    CheckTxnOUI = fun(T) -> T == SignedOUITxn end,
+    ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeOUI, timer:seconds(120)),
+    ok = miner_ct_utils:wait_for_txn(Miners, CheckTxnOUI, timer:seconds(120)),
+
+    %% open a state channel
+    ID = crypto:strong_rand_bytes(32),
+    ExpireWithin = 10,
+    SCOpenNonce = 1,
+    OUI = 1,
+    Amount = 100,
+    SCOpenTxn = ct_rpc:call(RouterNode,
+                            blockchain_txn_state_channel_open_v1,
+                            new,
+                            [ID, RouterPubkeyBin, ExpireWithin, OUI, SCOpenNonce, Amount]),
+    ct:pal("SCOpenTxn: ~p", [SCOpenTxn]),
+    SignedSCOpenTxn = ct_rpc:call(RouterNode,
+                                  blockchain_txn_state_channel_open_v1,
+                                  sign,
+                                  [SCOpenTxn, RouterSigFun]),
+    ct:pal("SignedSCOpenTxn: ~p", [SignedSCOpenTxn]),
+    ok = ct_rpc:call(RouterNode, blockchain_worker, submit_txn, [SignedSCOpenTxn]),
+
+    %% check that sc open txn appears on miners
+    CheckTypeSCOpen = fun(T) -> blockchain_txn:type(T) == blockchain_txn_state_channel_open_v1 end,
+    CheckTxnSCOpen = fun(T) -> T == SignedSCOpenTxn end,
+    ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeSCOpen, timer:seconds(120)),
+    ok = miner_ct_utils:wait_for_txn(Miners, CheckTxnSCOpen, timer:seconds(120)),
+
+    %% At this point, we're certain that sc is open
+    %% Use client node to send some packets
+    lists:foreach(fun(N) -> send_packet(N, ClientNode, {devaddr, 1207959553}) end, lists:seq(1,12)),
+
+    %% wait for election so rewards get paid out
+    ElectionInterval = ?config(?election_interval, Config),
+    ok = miner_ct_utils:wait_for_gte(height, Miners, ElectionInterval+5),
+    %% for rewards txn to appear
+    CheckTypeRewards = fun(T) -> blockchain_txn:type(T) == blockchain_txn_rewards_v1 end,
+    ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeRewards, timer:seconds(120)),
+
+    %% Check whether the balances are updated in the eventual sc close txn
+    BlockDetails = miner_ct_utils:get_txn_block_details(RouterNode, CheckTypeRewards),
+    RewardsTxn = miner_ct_utils:get_txn(BlockDetails, CheckTypeRewards),
+    ct:pal("RewardsTxn: ~p", [RewardsTxn]),
+
+    %% check to make sure the transaction has rewards for dc in it
+
+    ok.
+
+%% Helper functions
+>>>>>>> 7c8673d... WIP
 
 send_packet(N, Client, Addr) ->
     Nbin = integer_to_binary(N),
