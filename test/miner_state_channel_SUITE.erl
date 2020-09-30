@@ -999,7 +999,7 @@ dc_rewards_v4_test(Config) ->
 
     %% open a state channel
     ID = crypto:strong_rand_bytes(32),
-    ExpireWithin = 10,
+    ExpireWithin = 15,
     SCOpenNonce = 1,
     OUI = 1,
     Amount = 100,
@@ -1038,8 +1038,15 @@ dc_rewards_v4_test(Config) ->
     ct:pal("RewardsTxn: ~p", [RewardsTxn]),
 
     %% check to make sure the transaction has rewards for dc in it
+    Rewards = blockchain_txn_rewards_v1:rewards(RewardsTxn),
+    DCRewards = [blockchain_txn_reward_v1:amount(R) || R <- Rewards,
+                                                       blockchain_txn_reward_v1:type(R) == data_credits],
+    ct:pal("DCRewards: ~p", [DCRewards]),
 
-    ok.
+    case length(DCRewards) > 0 of
+        false -> ct:fail("DC rewards contained no values");
+        true -> ok
+    end.
 
 %% Helper functions
 >>>>>>> 7c8673d... WIP
