@@ -61,7 +61,7 @@
          wait_for_txn/2, wait_for_txn/3, wait_for_txn/4,
          format_txn_mgr_list/1,
          get_txn_block_details/2, get_txn_block_details/3,
-         get_txn/2,
+         get_txn/2, get_txns/2,
          get_genesis_block/2,
          load_genesis_block/3
         ]).
@@ -1043,13 +1043,18 @@ get_txn_block_details(Miner, PredFun, Timeout) ->
             end
     end.
 
-get_txn(TxnList, PredFun) when is_list(TxnList) ->
-    lists:foldl(fun(T, Acc) -> [ get_txn([T], PredFun) | Acc ] end, [], TxnList);
 get_txn([{_, B}], PredFun) ->
     hd(lists:filter(fun(T) ->
                             PredFun(T)
                     end,
                     blockchain_block:transactions(B))).
+
+get_txns(Details, PredFun) when is_list(Details) ->
+    lists:foldl(fun({_, B}, Acc) ->
+                        Acc ++ lists:filter(fun(T) -> PredFun(T) end,
+                                            blockchain_block:transactions(B))
+                end, [], Details).
+
 
 %% ------------------------------------------------------------------
 %% Local Helper functions

@@ -1019,7 +1019,8 @@ dc_rewards_v4_test(Config) ->
 
     %% Check whether the balances are updated in the eventual sc close txn
     BlockDetails = miner_ct_utils:get_txn_block_details(RouterNode, CheckTypeRewards),
-    RewardsTxns = miner_ct_utils:get_txn(BlockDetails, CheckTypeRewards),
+    ct:pal("BlockDetails: ~p", [BlockDetails]),
+    RewardsTxns = miner_ct_utils:get_txns(BlockDetails, CheckTypeRewards),
     ct:pal("RewardsTxns: ~p", [RewardsTxns]),
 
     %% check to make sure transactions have rewards for dc in it
