@@ -1019,13 +1019,15 @@ dc_rewards_v4_test(Config) ->
 
     %% Check whether the balances are updated in the eventual sc close txn
     BlockDetails = miner_ct_utils:get_txn_block_details(RouterNode, CheckTypeRewards),
-    RewardsTxn = miner_ct_utils:get_txn(BlockDetails, CheckTypeRewards),
-    ct:pal("RewardsTxn: ~p", [RewardsTxn]),
+    RewardsTxns = miner_ct_utils:get_txn(BlockDetails, CheckTypeRewards),
+    ct:pal("RewardsTxns: ~p", [RewardsTxns]),
 
-    %% check to make sure the transaction has rewards for dc in it
-    Rewards = blockchain_txn_rewards_v1:rewards(RewardsTxn),
-    DCRewards = [blockchain_txn_reward_v1:amount(R) || R <- Rewards,
-                                                       blockchain_txn_reward_v1:type(R) == data_credits],
+    %% check to make sure transactions have rewards for dc in it
+    DCRewards = lists:foldl(fun(E, Acc) ->
+        Rewards = blockchain_txn_rewards_v1:rewards(E),
+        [blockchain_txn_reward_v1:amount(R) || R <- Rewards,
+                                 blockchain_txn_reward_v1:type(R) == data_credits] ++ Acc
+                end, [], RewardsTxns),
     ct:pal("DCRewards: ~p", [DCRewards]),
 
     case length(DCRewards) > 0 of

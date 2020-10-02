@@ -1043,6 +1043,8 @@ get_txn_block_details(Miner, PredFun, Timeout) ->
             end
     end.
 
+get_txn(TxnList, PredFun) when is_list(TxnList) ->
+    lists:foldl(fun(T, Acc) -> [ get_txn([T], PredFun) | Acc ] end, [], TxnList);
 get_txn([{_, B}], PredFun) ->
     hd(lists:filter(fun(T) ->
                             PredFun(T)
