@@ -61,6 +61,7 @@ scv2_only_tests() ->
      reject_test,
      server_doesnt_close_test,
      client_reports_overspend_test,
+     server_doesnt_close_test,
      dc_rewards_v4_test
     ].
 
@@ -997,37 +998,21 @@ dc_rewards_v4_test(Config) ->
     ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeOUI, timer:seconds(120)),
     ok = miner_ct_utils:wait_for_txn(Miners, CheckTxnOUI, timer:seconds(120)),
 
-    %% open a state channel
-    ID = crypto:strong_rand_bytes(32),
-    ExpireWithin = 15,
-    SCOpenNonce = 1,
-    OUI = 1,
-    Amount = 100,
-    SCOpenTxn = ct_rpc:call(RouterNode,
-                            blockchain_txn_state_channel_open_v1,
-                            new,
-                            [ID, RouterPubkeyBin, ExpireWithin, OUI, SCOpenNonce, Amount]),
-    ct:pal("SCOpenTxn: ~p", [SCOpenTxn]),
-    SignedSCOpenTxn = ct_rpc:call(RouterNode,
-                                  blockchain_txn_state_channel_open_v1,
-                                  sign,
-                                  [SCOpenTxn, RouterSigFun]),
-    ct:pal("SignedSCOpenTxn: ~p", [SignedSCOpenTxn]),
-    ok = ct_rpc:call(RouterNode, blockchain_worker, submit_txn, [SignedSCOpenTxn]),
-
     %% check that sc open txn appears on miners
     CheckTypeSCOpen = fun(T) -> blockchain_txn:type(T) == blockchain_txn_state_channel_open_v1 end,
-    CheckTxnSCOpen = fun(T) -> T == SignedSCOpenTxn end,
-    ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeSCOpen, timer:seconds(120)),
-    ok = miner_ct_utils:wait_for_txn(Miners, CheckTxnSCOpen, timer:seconds(120)),
 
-    %% At this point, we're certain that sc is open
-    %% Use client node to send some packets
-    lists:foreach(fun(N) -> send_packet(N, ClientNode, {devaddr, 1207959553}) end, lists:seq(1,12)),
+    lists:foreach(fun(N) ->
+                    {ok, SignedSCOpenTxn} = submit_sc_open(N, RouterNode,
+                                                           RouterPubkeyBin, RouterSigFun),
+                    CheckTxnSCOpen = fun(T) -> T == SignedSCOpenTxn end,
+                    ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeSCOpen, timer:seconds(120)),
+                    ok = miner_ct_utils:wait_for_txn(Miners, CheckTxnSCOpen, timer:seconds(120)),
+                    lists:foreach(fun(P) ->
+                                          send_packet(P, ClientNode, {devaddr, 1207959553})
+                                  end, lists:seq(1, 15)),
+                    ok = miner_ct_utils:wait_for_gte(epoch, Miners, N+1)
+                  end, lists:seq(1, 2)),
 
-    %% wait for election so rewards get paid out
-    ElectionInterval = ?config(?election_interval, Config),
-    ok = miner_ct_utils:wait_for_gte(height, Miners, ElectionInterval+5),
     %% for rewards txn to appear
     CheckTypeRewards = fun(T) -> blockchain_txn:type(T) == blockchain_txn_rewards_v1 end,
     ok = miner_ct_utils:wait_for_txn(Miners, CheckTypeRewards, timer:seconds(120)),
@@ -1050,6 +1035,26 @@ dc_rewards_v4_test(Config) ->
 
 %% Helper functions
 >>>>>>> 7c8673d... WIP
+
+submit_sc_open(Nonce, RouterNode, RouterPubkeyBin, RouterSigFun) ->
+    %% open a state channel
+    ID = crypto:strong_rand_bytes(32),
+    ExpireWithin = 15,
+    OUI = 1,
+    Amount = 100,
+    SCOpenTxn = ct_rpc:call(RouterNode,
+                            blockchain_txn_state_channel_open_v1,
+                            new,
+                            [ID, RouterPubkeyBin, ExpireWithin, OUI, Nonce, Amount]),
+    ct:pal("SCOpenTxn: ~p", [SCOpenTxn]),
+    SignedSCOpenTxn = ct_rpc:call(RouterNode,
+                                  blockchain_txn_state_channel_open_v1,
+                                  sign,
+                                  [SCOpenTxn, RouterSigFun]),
+    ct:pal("SignedSCOpenTxn: ~p", [SignedSCOpenTxn]),
+    ct_rpc:call(RouterNode, blockchain_worker, submit_txn, [SignedSCOpenTxn]),
+    {ok, SignedSCOpenTxn}.
+
 
 send_packet(N, Client, Addr) ->
     Nbin = integer_to_binary(N),
