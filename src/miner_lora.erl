@@ -494,7 +494,7 @@ maybe_send_udp_ack(Socket, IP, Port, Packet, _RegDomainConfirmed)->
 sort_packets(Packets) ->
     lists:sort(
         fun(A, B) ->
-            maps:get(<<"lsnr">>, A) >= maps:get(<<"lsnr">>, B)
+            packet_lsnr(A) >= packet_lsnr(B)
         end,
         Packets
     ).
@@ -514,8 +514,8 @@ handle_packets([Packet|Tail], Gateway, #state{reg_region = Region} = State) ->
             %% onion server
             miner_onion_server:decrypt_radio(
                 Payload,
-                erlang:trunc(maps:get(<<"rssi">>, Packet)),
-                maps:get(<<"lsnr">>, Packet),
+                erlang:trunc(packet_rssi(Packet)),
+                packet_lsnr(Packet),
                 %% TODO we might want to send GPS time here, if available
                 maps:get(<<"tmst">>, Packet),
                 Freq,
@@ -578,8 +578,8 @@ maybe_mirror({Sock, Destination}, Packet) ->
 -spec send_to_router(lorawan, blockchain_helium_packet:routing_info(), map(), atom()) -> ok.
 send_to_router(Type, RoutingInfo, Packet, Region) ->
     Data = base64:decode(maps:get(<<"data">>, Packet)),
-    RSSI = maps:get(<<"rssi">>, Packet),
-    SNR = maps:get(<<"lsnr">>, Packet),
+    RSSI = packet_rssi(Packet),
+    SNR = packet_lsnr(Packet),
     %% TODO we might want to send GPS time here, if available
     Time = maps:get(<<"tmst">>, Packet),
     Freq = maps:get(<<"freq">>, Packet),
@@ -651,4 +651,30 @@ channel(Freq, [H|T], Acc) ->
             Acc;
         false ->
             channel(Freq, T, Acc+1)
+    end.
+
+%% Extracts a packets RSSI, abstracting away the differences between
+%% GWIP V1/V2.
+-spec packet_rssi(map()) -> number().
+packet_rssi(Packet) ->
+    case maps:get(<<"rssi">>, Packet, undefined) of
+        %% GWMP V2
+        undefined ->
+            maps:get(<<"rssic">>, maps:get(<<"rsig">>, Packet));
+        %% GWMP V1
+        RSSI ->
+            RSSI
+    end.
+
+%% Extracts a packets SNR, abstracting away the differences between
+%% GWIP V1/V2.
+-spec packet_lsnr(map()) -> number().
+packet_lsnr(Packet) ->
+    case maps:get(<<"lsnr">>, Packet, undefined) of
+        %% GWMP V2
+        undefined ->
+            maps:get(<<"lsnr">>, maps:get(<<"rsig">>, Packet));
+        %% GWMP V1
+        LSNR ->
+            LSNR
     end.
